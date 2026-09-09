@@ -124,7 +124,10 @@ const mockSetPanelVisible = vi.hoisted(() => vi.fn());
 const mockRequestPanelMaximize = vi.hoisted(() => vi.fn());
 const mockClearPanelMaximizeRequest = vi.hoisted(() => vi.fn());
 const mockPanelState = vi.hoisted(() => ({ panelVisible: true }));
-const mockRouteParams = vi.hoisted(() => ({ issueId: "PAP-1" }));
+const mockRouteParams = vi.hoisted(() => ({
+  issueId: "PAP-1",
+  companyPrefix: "PAP",
+}));
 const mockSidebarState = vi.hoisted(() => ({ isMobile: false }));
 const mockIssuePropertiesRender = vi.hoisted(() => vi.fn());
 const mockTaskSidePanelRender = vi.hoisted(() => vi.fn());
@@ -401,7 +404,11 @@ vi.mock("../components/TaskChatThread", () => ({
         {props.threadHeader}
         Task chat thread
         {props.workProducts?.map((workProduct) => (
-          <RichWorkProductCard key={workProduct.id} workProduct={workProduct} href={workProduct.url} />
+          <RichWorkProductCard
+            key={workProduct.id}
+            workProduct={workProduct}
+            href={workProduct.url}
+          />
         ))}
         {props.onStopRun ? (
           <button
@@ -1383,6 +1390,7 @@ describe("IssueDetail", () => {
     mockLocation.hash = "";
     mockLocation.state = null;
     mockRouteParams.issueId = "PAP-1";
+    mockRouteParams.companyPrefix = "PAP";
   });
 
   afterEach(async () => {
@@ -1400,23 +1408,56 @@ describe("IssueDetail", () => {
   it("opens artifact cards in the shared gallery at the selected image without duplicating attachments", async () => {
     mockIssuesApi.get.mockResolvedValue(createIssue());
     mockIssuesApi.listAttachments.mockResolvedValue([
-      createAttachment({ id: "chat-image", contentType: "image/png", originalFilename: "chat.png" }),
-      createAttachment({ id: "00000000-0000-4000-8000-000000000001", contentType: "image/png", originalFilename: "artifact.png" }),
+      createAttachment({
+        id: "chat-image",
+        contentType: "image/png",
+        originalFilename: "chat.png",
+      }),
+      createAttachment({
+        id: "00000000-0000-4000-8000-000000000001",
+        contentType: "image/png",
+        originalFilename: "artifact.png",
+      }),
     ]);
     mockIssuesApi.listWorkProducts.mockResolvedValue([
-      createArtifactWorkProduct({ id: "artifact-1", attachmentId: "00000000-0000-4000-8000-000000000001", contentType: "image/png", originalFilename: "artifact.png" }),
-      createArtifactWorkProduct({ id: "artifact-2", attachmentId: "00000000-0000-4000-8000-000000000002", contentType: "image/png", originalFilename: "output.png" }),
+      createArtifactWorkProduct({
+        id: "artifact-1",
+        attachmentId: "00000000-0000-4000-8000-000000000001",
+        contentType: "image/png",
+        originalFilename: "artifact.png",
+      }),
+      createArtifactWorkProduct({
+        id: "artifact-2",
+        attachmentId: "00000000-0000-4000-8000-000000000002",
+        contentType: "image/png",
+        originalFilename: "output.png",
+      }),
     ]);
     const windowOpen = vi.spyOn(window, "open").mockImplementation(() => null);
     await act(async () => {
-      root.render(<QueryClientProvider client={queryClient}><IssueDetail /></QueryClientProvider>);
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <IssueDetail />
+        </QueryClientProvider>,
+      );
     });
     await waitForAssertion(() => {
-      expect(container.querySelector('button[aria-label="Open gallery: output.png"]')).not.toBeNull();
+      expect(
+        container.querySelector(
+          'button[aria-label="Open gallery: output.png"]',
+        ),
+      ).not.toBeNull();
     });
-    for (const [filename, index] of [["artifact.png", 1], ["output.png", 2]] as const) {
+    for (const [filename, index] of [
+      ["artifact.png", 1],
+      ["output.png", 2],
+    ] as const) {
       await act(async () => {
-        (container.querySelector(`button[aria-label="Open gallery: ${filename}"]`) as HTMLButtonElement).click();
+        (
+          container.querySelector(
+            `button[aria-label="Open gallery: ${filename}"]`,
+          ) as HTMLButtonElement
+        ).click();
       });
       expect(mockImageGalleryRender.mock.calls.at(-1)?.[0]).toMatchObject({
         open: true,
@@ -1424,7 +1465,11 @@ describe("IssueDetail", () => {
         items: [
           { id: "chat-image" },
           { id: "00000000-0000-4000-8000-000000000001" },
-          { id: "work-product-artifact-2", downloadPath: "/api/attachments/00000000-0000-4000-8000-000000000002/content?download=1" },
+          {
+            id: "work-product-artifact-2",
+            downloadPath:
+              "/api/attachments/00000000-0000-4000-8000-000000000002/content?download=1",
+          },
         ],
       });
     }
@@ -1477,6 +1522,89 @@ describe("IssueDetail", () => {
       ),
     ).toBe(false);
   });
+
+  it.each([false, true])(
+    "preserves explicit upload receipt IDs through the page mutation (reassign=%s)",
+    async (reassign) => {
+      const issue = createIssue();
+      const id = "9af8228f-0be7-45ae-a104-6fbe0af6f1d3";
+      const file = new File(["fresh"], "fresh.txt", { type: "text/plain" });
+      mockIssuesApi.get.mockResolvedValue(issue);
+      mockIssuesApi.uploadAttachment.mockResolvedValue({
+        id,
+        issueId: issue.id,
+        companyId: issue.companyId,
+        contentPath: `/api/attachments/${id}/content`,
+      });
+      mockIssuesApi.addComment
+        .mockClear()
+        .mockResolvedValue(createIssueComment());
+      mockIssuesApi.update
+        .mockClear()
+        .mockResolvedValue({ ...issue, comment: createIssueComment() });
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <IssueDetail />
+          </QueryClientProvider>,
+        ),
+      );
+      await waitForAssertion(() =>
+        expect(mockIssueChatThreadRender).toHaveBeenCalled(),
+      );
+      const props = mockIssueChatThreadRender.mock.calls.at(-1)?.[0] as {
+        onAttachImage(file: File): Promise<{ id: string }>;
+        onAdd(
+          body: string,
+          reopen?: boolean,
+          reassignment?: {
+            assigneeAgentId: string | null;
+            assigneeUserId: string | null;
+          },
+          attachmentIds?: string[],
+        ): Promise<void>;
+      };
+      let uploaded!: { id: string };
+      await act(async () => {
+        uploaded = await props.onAttachImage(file);
+      });
+      expect(uploaded.id).toBe(id);
+      const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+      await act(async () =>
+        props.onAdd(
+          "Inspect the new file",
+          undefined,
+          reassign
+            ? { assigneeAgentId: "agent-2", assigneeUserId: null }
+            : undefined,
+          [uploaded.id],
+        ),
+      );
+      for (const ref of [issue.id, issue.identifier]) {
+        expect(invalidate).toHaveBeenCalledWith({
+          queryKey: queryKeys.issues.attachments(ref!),
+        });
+      }
+      if (reassign) {
+        expect(mockIssuesApi.update).toHaveBeenCalledWith(issue.identifier, {
+          comment: "Inspect the new file",
+          assigneeAgentId: "agent-2",
+          assigneeUserId: null,
+          attachmentIds: [id],
+        });
+        expect(mockIssuesApi.addComment).not.toHaveBeenCalled();
+      } else {
+        expect(mockIssuesApi.addComment).toHaveBeenCalledWith(
+          issue.identifier,
+          "Inspect the new file",
+          undefined,
+          undefined,
+          [id],
+        );
+        expect(mockIssuesApi.update).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps hierarchy breadcrumbs and label chips out of the Streamlined task header", async () => {
     mockIssuesApi.get.mockResolvedValue(
@@ -2866,6 +2994,94 @@ describe("IssueDetail", () => {
     expect(freshComment?.queueState).toBeUndefined();
   });
 
+  it.each(["missing_activity", "conflicting_activity"])(
+    "keeps the persisted authoring run for private Board replies: %s",
+    async (mode) => {
+      mockIssuesApi.get.mockResolvedValue(
+        createIssue({ status: "in_progress" }),
+      );
+      mockIssuesApi.listComments.mockResolvedValue([
+        createIssueComment({
+          id: "private-board-answer",
+          authorType: "agent",
+          authorAgentId: "agent-1",
+          authorUserId: null,
+          createdByRunId: "run-private-board",
+          body: "Object: lighthouse. Accent color: amber. Count: 63.",
+        }),
+        createIssueComment({
+          id: "distinct-human-answer",
+          body: "Object: lighthouse. Accent color: amber. Count: 63.",
+        }),
+      ]);
+      mockActivityApi.runsForIssue.mockResolvedValue([
+        {
+          runId: "run-private-board",
+          agentId: "agent-1",
+          agentName: "Runner",
+          adapterType: "paperclip_runner",
+          runtimeMode: "native",
+          status: "succeeded",
+          createdAt: "2026-04-21T00:00:00.000Z",
+          startedAt: "2026-04-21T00:00:00.000Z",
+          finishedAt: "2026-04-21T00:00:02.000Z",
+          contextIssueId: "issue-1",
+          resultJson: {
+            presentationDecision: {
+              schema: "paperclip.run_presentation_decision.v1",
+              chosenSource: "existing_issue_comment",
+              commentId: "private-board-answer",
+            },
+          },
+          logBytes: 1,
+        },
+      ]);
+      if (mode === "conflicting_activity") {
+        mockActivityApi.forIssue.mockResolvedValue([
+          {
+            action: "issue.comment_added",
+            runId: "run-other",
+            agentId: "agent-other",
+            details: {
+              commentId: "private-board-answer",
+              interruptedRunId: "run-unrelated-interruption",
+            },
+          },
+        ]);
+      }
+
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <IssueDetail />
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+
+      const props = mockIssueChatThreadRender.mock.calls.at(-1)?.[0] as {
+        comments?: Array<Record<string, unknown>>;
+      };
+      expect(props.comments).toHaveLength(2);
+      expect(
+        props.comments?.find(
+          (comment) => comment.id === "private-board-answer",
+        ),
+      ).toMatchObject({
+        createdByRunId: "run-private-board",
+        runId: "run-private-board",
+        runAgentId: "agent-1",
+        interruptedRunId: null,
+      });
+      expect(
+        props.comments?.find(
+          (comment) => comment.id === "distinct-human-answer",
+        )?.runId,
+      ).toBeUndefined();
+    },
+  );
+
   it("recovers historical follow-up provenance from overlapping run chronology", async () => {
     mockIssuesApi.get.mockResolvedValue(createIssue({ status: "done" }));
     mockIssuesApi.listComments.mockResolvedValue([
@@ -4088,7 +4304,9 @@ describe("IssueDetail", () => {
       expect(container.textContent).toContain("Subtree pause is active.");
     });
 
-    const pauseBannerTitle = Array.from(container.querySelectorAll("span")).find(
+    const pauseBannerTitle = Array.from(
+      container.querySelectorAll("span"),
+    ).find(
       (element) => element.textContent?.trim() === "Subtree pause is active.",
     );
     expect(pauseBannerTitle?.closest(".rounded-md")?.classList).toContain(
