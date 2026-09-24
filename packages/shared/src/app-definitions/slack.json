@@ -33,7 +33,7 @@
           "search:read.public"
         ]
       },
-      "guidanceMd": "Connect a Slack workspace and limit access to the channels agents need. In your Slack app, add these scopes under User Token Scopes (not Bot Token Scopes), and add Paperclip's callback URL as a Redirect URL.",
+      "guidanceMd": "Connect a Slack workspace and limit access to the channels agents need. In your Slack app, add these scopes under User Token Scopes (not Bot Token Scopes), add Paperclip's callback URL as a Redirect URL, and turn on Model Context Protocol under Features > Agents & AI Apps.",
       "riskTier": "S3",
       "label": "Use this connection as an agent tool",
       "purpose": "tool",
