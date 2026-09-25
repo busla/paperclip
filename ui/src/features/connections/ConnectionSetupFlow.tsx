@@ -329,6 +329,19 @@ const OAUTH_SIGN_IN_STEP_LABELS = ["Access", "Sign in"];
 const SETUP_GUIDANCE_SLUGS = new Set(["railway", "slack"]);
 
 /**
+ * The scopes a person must type into their own OAuth app, or none.
+ *
+ * Only a customer-owned app needs them. A method that can register its client
+ * dynamically asks for its own scopes, so naming them there is noise. Reading
+ * the list from the method keeps the screen and the request identical.
+ */
+function customerOwnedScopes(method: ConnectionMethodDef | null | undefined): string[] {
+  if (method?.auth !== "oauth") return [];
+  if (!method.ownershipModes.every((mode) => mode === "customer")) return [];
+  return method.defaults?.scopesHint ?? [];
+}
+
+/**
  * Which identity a fresh connection should default to (PAP-17835).
  *
  * Company identity is the product default whenever the selected method permits
@@ -2410,6 +2423,12 @@ function StandardConnectionSetupFlow({
         {SETUP_GUIDANCE_SLUGS.has(entry?.slug ?? "") && (
           <div className="mb-6 space-y-3 text-sm text-muted-foreground">
             <p>{accessStepMethod?.guidanceMd}</p>
+            {customerOwnedScopes(accessStepMethod).length > 0 ? (
+              <p>
+                Add these scopes to your {entry?.name} app:{" "}
+                <span className="font-mono">{customerOwnedScopes(accessStepMethod).join(" ")}</span>
+              </p>
+            ) : null}
             {accessStepMethod?.warnings?.length ? (
               <ul className="list-disc space-y-2 pl-5">
                 {accessStepMethod.warnings.map((warning) => <li key={warning}>{warning}</li>)}

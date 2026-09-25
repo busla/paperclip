@@ -351,7 +351,7 @@ const apps = [
           scopesHint: ["channels:read", "chat:write", "search:read.public"],
         },
         "S3",
-        "Connect a Slack workspace and limit access to the channels agents need. In your Slack app, add these scopes under User Token Scopes (not Bot Token Scopes), add Paperclip's callback URL as a Redirect URL, and turn on Model Context Protocol under Features > Agents & AI Apps.",
+        "Connect a Slack workspace and limit access to the channels agents need. In your Slack app, add the scopes named below under User Token Scopes (not Bot Token Scopes), add Paperclip's callback URL as a Redirect URL, and turn on Model Context Protocol under Features > Agents & AI Apps.",
         {
           label: "Use this connection as an agent tool",
           purpose: "tool",
