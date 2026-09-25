@@ -648,6 +648,51 @@ describeEmbeddedPostgres("tool gateway acceptance", () => {
     }
   });
 
+  it("keeps tool names distinct when they share the capped name prefix", async () => {
+    const company = await createCompany(db);
+    const agent = await createAgent(db, company.id);
+    const { run } = await createIssueAndRun(db, company.id, agent.id);
+    // Both names are the same for the first 48 slug characters, so both cap to one base name.
+    const sharedPrefix = "notion-show-advanced-analysis-next-steps-for-the";
+    const first = await createRemoteMcpTool(db, company.id, {
+      applicationKey: `app-gallery:notion:${randomUUID()}`,
+      connectionName: "Notion",
+      toolName: `${sharedPrefix}-current-workspace`,
+      riskLevel: "read",
+    });
+    const { id: _firstId, ...firstEntry } = first.catalogEntry;
+    const [second] = await db.insert(toolCatalogEntries).values({
+      ...firstEntry,
+      name: `${sharedPrefix}-archived-workspace-${randomUUID()}`,
+      toolName: `${sharedPrefix}-archived-workspace`,
+      versionHash: randomUUID(),
+    }).returning();
+    const profile = await allowToolsForAgent(db, company.id, agent.id, []);
+    await db.insert(toolProfileEntries).values([first.catalogEntry.id, second!.id].map((catalogEntryId) => ({
+      companyId: company.id,
+      profileId: profile.id,
+      selectorType: "catalog_entry" as const,
+      effect: "include" as const,
+      catalogEntryId,
+    })));
+
+    const gateway = createTestToolGatewayService(db);
+    const session = await gateway.createSession({ companyId: company.id, agentId: agent.id, runId: run.id });
+    const tools = await gateway.listToolsForSession(session.token);
+    const names = [first.catalogEntry.id, second!.id].map(
+      (catalogEntryId) => tools.find((tool) => tool.catalogEntryId === catalogEntryId)?.name,
+    );
+
+    const baseName = `mcp.notion-${first.connection.id.replace(/-/g, "").slice(0, 8)}:${sharedPrefix}`;
+    expect(names).toEqual([
+      `${baseName}-${first.catalogEntry.id.replace(/-/g, "").slice(0, 8)}`,
+      `${baseName}-${second!.id.replace(/-/g, "").slice(0, 8)}`,
+    ]);
+    for (const name of names) {
+      expect(`mcp__paperclip-assigned__${name}`.length).toBeLessThanOrEqual(128);
+    }
+  });
+
   it("exposes a named gateway with scoped bearer-token auth and revocation", async () => {
     const company = await createCompany(db);
     const remote = await startFakeRemoteMcpServer(async ({ body }) => ({
