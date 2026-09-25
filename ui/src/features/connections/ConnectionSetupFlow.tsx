@@ -2092,9 +2092,11 @@ function StandardConnectionSetupFlow({
         guidance={SETUP_GUIDANCE_SLUGS.has(entry?.slug ?? "") && accessStepMethod ? (
           <div className="space-y-3 text-sm text-muted-foreground">
             <p>{accessStepMethod.guidanceMd}</p>
-            <ul className="list-disc space-y-2 pl-5">
-              {accessStepMethod.warnings?.map((warning) => <li key={warning}>{warning}</li>)}
-            </ul>
+            {accessStepMethod.warnings?.length ? (
+              <ul className="list-disc space-y-2 pl-5">
+                {accessStepMethod.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+              </ul>
+            ) : null}
           </div>
         ) : null}
         defaults={curatedOAuthDefaults}
