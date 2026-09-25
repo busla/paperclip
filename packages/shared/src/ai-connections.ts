@@ -170,6 +170,8 @@ export interface AiManagedConnectionSummary {
   isDefault: boolean;
   status: "connected" | "needs_attention" | "expired" | "revoked";
   unavailableReason?: string;
+  /** Gateway this API key is sent to, when the connection has one. */
+  endpointBaseUrl?: string;
 }
 /**
  * A gateway (LiteLLM, a corporate proxy) that an API key belongs to. The key is
@@ -178,7 +180,9 @@ export interface AiManagedConnectionSummary {
  * routing and attribution, and cannot carry credentials.
  */
 export const AI_GATEWAY_PROVIDERS = ["anthropic", "openai"] as const;
-const CREDENTIAL_HEADER_RE = /^(authorization|proxy-authorization|x-api-key|api-key|cookie)$/i;
+// Credentials belong in the encrypted key. X-Anthropic-Agent-Id is set per run
+// by Paperclip, so a shared connection cannot override agent attribution.
+const RESERVED_HEADER_RE = /^(authorization|proxy-authorization|x-api-key|api-key|cookie|x-anthropic-agent-id)$/i;
 export const aiConnectionEndpointSchema = z
   .object({
     baseUrl: z
@@ -187,13 +191,14 @@ export const aiConnectionEndpointSchema = z
       .url()
       .max(2048)
       .refine((url) => /^https?:\/\//i.test(url), "Use an http or https URL")
+      .refine((url) => { const parsed = new URL(url); return !parsed.username && !parsed.password; }, "Put credentials in the API key, not in the URL")
       .transform((url) => url.replace(/\/+$/, "")),
     headers: z
       .record(
         z
           .string()
           .regex(/^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,128}$/, "Invalid header name")
-          .refine((name) => !CREDENTIAL_HEADER_RE.test(name), "Put credentials in the API key, not in headers"),
+          .refine((name) => !RESERVED_HEADER_RE.test(name), "This header is reserved: put credentials in the API key; Paperclip sets agent attribution"),
         z.string().max(1024).regex(/^[^\r\n]*$/, "Header values cannot contain line breaks"),
       )
       .refine((headers) => Object.keys(headers).length <= 20, "Use at most 20 headers")
