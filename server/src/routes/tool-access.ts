@@ -53,6 +53,7 @@ import {
   updateToolProfileWithEntriesSchema,
 } from "@paperclipai/shared";
 import { validate } from "../middleware/validate.js";
+import { resolveBoardActorForOAuthState } from "../middleware/auth.js";
 import { getActorInfo, assertBoard, assertCompanyAccess, assertInstanceAdmin, getAccessibleResource, hasCompanyAccess } from "./authz.js";
 import { badRequest, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
 import { accessService, logActivity, toolAccessPolicyService, toolAccessService, vercelConnectIntegrationStatus } from "../services/index.js";
@@ -191,6 +192,10 @@ export function connectionIntentOAuthOutcomeHtml(input: {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Connection authorization</title></head><body><p>Returning to Paperclip…</p><script>const message=${message};const targetOrigin=${targetOrigin}||window.location.origin;if(window.opener&&window.opener!==window){window.opener.postMessage(message,targetOrigin);window.close();}else{window.location.replace(${fallback});}</script></body></html>`;
 }
 
+export function crossOriginOAuthConnectedHtml(): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Connected</title></head><body><p>Connected. You can close this tab and return to Paperclip.</p></body></html>`;
+}
+
 function normalizeCloudConnectorEnrollmentReturnTo(returnTo?: string | null): string | null {
   if (!returnTo || returnTo.length > 2_048) return null;
   try {
@@ -242,6 +247,8 @@ export function toolAccessRoutes(
     vercelConnectClient?: VercelConnectClient | null;
     paperclipCloudConnector?: PaperclipCloudConnector | null;
     connectionIntentHeartbeat?: Pick<Heartbeat, "wakeup">;
+    /** See `oauthCrossOriginCallback` in server config. Off by default. */
+    oauthCrossOriginCallback?: boolean;
   } = {},
 ) {
   const router = Router();
@@ -447,6 +454,33 @@ export function toolAccessRoutes(
       .limit(1);
     if (!company) throw new Error("OAuth callback connection belongs to a missing company");
     return `/${company.issuePrefix}/apps/${connectionId}/permissions`;
+  }
+
+  /**
+   * A same-origin session cookie can't reach a browser-facing OAuth callback
+   * that lives on a different origin than the app itself (see
+   * `resolveBoardActorForOAuthState`). When that's the case, stand in for it
+   * using the pending state's subject: the state is already the proof that
+   * matters, and every caller re-checks it (`hasCompanyAccess`,
+   * `assertToolConnection*Access`) against the actor this sets.
+   *
+   * Scoped to single-user flows (`pendingState.subjectUserId`) only —
+   * organization-grant flows have no bound subject and genuinely need a live
+   * session to prove the completing user manages the connection.
+   *
+   * Off unless the deployment opts in (`oauthCrossOriginCallback`): without a
+   * session the state is a bearer token, so a user who is tricked into
+   * authorizing another user's pending flow links their provider account to
+   * that other user.
+   */
+  async function resolveActorFromOAuthState(
+    req: Request,
+    pendingState: { subjectUserId: string | null } | null,
+  ): Promise<void> {
+    if (!options.oauthCrossOriginCallback) return;
+    if (req.actor.type === "board" || !pendingState?.subjectUserId) return;
+    const actor = await resolveBoardActorForOAuthState(db, pendingState.subjectUserId);
+    if (actor) req.actor = actor;
   }
 
 function connectorEnrollmentPrincipal(req: Request): string {
@@ -1307,7 +1341,6 @@ function connectorEnrollmentPrincipal(req: Request): string {
   });
 
   router.get("/tools/oauth/callback", async (req, res) => {
-    assertBoard(req);
     const state = typeof req.query.state === "string" ? req.query.state : "";
     const code = typeof req.query.code === "string" ? req.query.code : null;
     const error = typeof req.query.error === "string" ? req.query.error : null;
@@ -1316,6 +1349,8 @@ function connectorEnrollmentPrincipal(req: Request): string {
     // `error` code to its own copy instead of reflecting them (PAP-17108).
     const iss = typeof req.query.iss === "string" ? req.query.iss : null;
     const pendingState = state ? await svc.peekOAuthState(state) : null;
+    await resolveActorFromOAuthState(req, pendingState);
+    assertBoard(req);
     if (!pendingState || !hasCompanyAccess(req, pendingState.companyId)) {
       throw badRequest("Invalid or expired OAuth state");
     }
@@ -1424,6 +1459,15 @@ function connectorEnrollmentPrincipal(req: Request): string {
         outcome: "connected",
         openerOrigin: pendingState.returnTo,
       });
+      return;
+    }
+    // A same-origin redirect is useless when this callback ran on a
+    // different origin than the app itself (see resolveActorFromOAuthState)
+    // — there is no session there for the app to land in either. Just say
+    // it worked; the user's own tab still has their real session. A caller
+    // without a session never gets the connection JSON either.
+    if (req.actor.source === "oauth_state") {
+      res.type("html").send(crossOriginOAuthConnectedHtml());
       return;
     }
     if (acceptsHtml) {

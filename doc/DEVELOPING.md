@@ -1430,6 +1430,28 @@ Default behavior:
 - `local_trusted`: enabled
 - `authenticated`: disabled
 
+## Cross-Origin OAuth Callbacks
+
+Some deployments keep the app on a private network and use a separate public
+origin only to receive OAuth provider callbacks. The board session cookie
+cannot reach that public origin. By default, such a callback fails.
+
+```sh
+PAPERCLIP_OAUTH_CROSS_ORIGIN_CALLBACK=true
+```
+
+When enabled:
+
+- A personal (user) connection callback without a session completes as the
+  user who started the flow. The single-use, short-lived OAuth state is the
+  only proof.
+- An organization connection callback still needs a live board session.
+- The same user can finish an organization flow from a different session.
+
+Risk: without a session, the state is a bearer token. A user who is tricked
+into authorizing another user's pending flow links their provider account to
+that other user. Enable this only when the split origin makes it necessary.
+
 ## CLI Client Operations
 
 Paperclip CLI now includes client-side control-plane commands in addition to setup commands.

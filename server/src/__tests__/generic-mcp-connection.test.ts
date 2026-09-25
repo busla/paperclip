@@ -313,6 +313,7 @@ function createRouteApp(
     deploymentExposure: "public" | "private";
     remoteHttpEndpointLookup?: NonNullable<Parameters<typeof toolAccessService>[1]>["remoteHttpEndpointLookup"];
     remoteHttpRequest?: NonNullable<Parameters<typeof toolAccessService>[1]>["remoteHttpRequest"];
+    oauthCrossOriginCallback?: boolean;
   },
   requestLogger?: express.RequestHandler,
 ) {
@@ -320,6 +321,14 @@ function createRouteApp(
   app.use(express.json());
   if (requestLogger) app.use(requestLogger);
   app.use((req, _res, next) => {
+    // `x-test-no-session` models a request that arrives on an origin the
+    // board session cookie cannot reach. `x-test-session` names the session.
+    if (req.get("x-test-no-session")) {
+      req.actor = { type: "none", source: "none" };
+      next();
+      return;
+    }
+    const sessionId = req.get("x-test-session");
     req.actor = {
       type: "board",
       userId: "board-user",
@@ -327,6 +336,7 @@ function createRouteApp(
       userEmail: null,
       isInstanceAdmin: true,
       source: "local_implicit",
+      ...(sessionId ? { sessionId } : {}),
     };
     next();
   });
@@ -903,6 +913,146 @@ describeEmbeddedPostgres("generic remote MCP connections", () => {
         status: "active",
       }),
     ]);
+  });
+
+  describe("OAuth callback on a separate public origin", () => {
+    async function insertBoardUser() {
+      const now = new Date();
+      await db.insert(authUsers).values({
+        id: "board-user",
+        name: "Board User",
+        email: "board-user@fixture.test",
+        emailVerified: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    async function connectAndAuthorize(
+      app: express.Express,
+      companyId: string,
+      grantKind: "user" | "organization",
+      fixture: ReturnType<typeof installMcpOAuthFixture>,
+      sessionId?: string,
+    ) {
+      const connect = request(app)
+        .post(`/api/companies/${companyId}/tools/apps/connect`)
+        .send({ link: MCP_URL, name: `Cross-origin ${grantKind}`, grantKind });
+      if (sessionId) connect.set("x-test-session", sessionId);
+      const response = await connect;
+      expect(response.status, JSON.stringify(response.body)).toBe(201);
+      const startUrl = response.body.auth.startUrl as string;
+      return {
+        connectionId: response.body.connectionId as string,
+        state: new URL(startUrl).searchParams.get("state")!,
+        code: fixture.issueAuthorizationCode(startUrl),
+      };
+    }
+
+    async function activeGrants(connectionId: string) {
+      return db
+        .select()
+        .from(connectionGrants)
+        .where(and(eq(connectionGrants.connectionId, connectionId), eq(connectionGrants.status, "active")));
+    }
+
+    it("completes a personal flow without a session when the deployment opts in", async () => {
+      const fixture = installMcpOAuthFixture({ auth: "oauth" });
+      const company = await createCompany(db);
+      await insertBoardUser();
+      vi.stubEnv("PAPERCLIP_PUBLIC_URL", PUBLIC_BASE_URL);
+      const app = createRouteApp(db, {
+        deploymentMode: "authenticated",
+        deploymentExposure: "private",
+        oauthCrossOriginCallback: true,
+      });
+      const flow = await connectAndAuthorize(app, company.id, "user", fixture);
+
+      // No Accept header: a session-less caller must still get only the
+      // confirmation page, never the connection JSON.
+      const callback = await request(app)
+        .get("/api/tools/oauth/callback")
+        .set("x-test-no-session", "1")
+        .query({ state: flow.state, code: flow.code, iss: ISSUER });
+
+      expect(callback.status, callback.text).toBe(200);
+      expect(callback.type).toBe("text/html");
+      expect(callback.text).toContain("Connected. You can close this tab");
+      expect(callback.text).not.toContain(flow.connectionId);
+      expect(await activeGrants(flow.connectionId)).toEqual([
+        expect.objectContaining({ kind: "user", subjectUserId: "board-user" }),
+      ]);
+    });
+
+    it("rejects a personal flow without a session by default", async () => {
+      const fixture = installMcpOAuthFixture({ auth: "oauth" });
+      const company = await createCompany(db);
+      await insertBoardUser();
+      vi.stubEnv("PAPERCLIP_PUBLIC_URL", PUBLIC_BASE_URL);
+      const app = createRouteApp(db, { deploymentMode: "authenticated", deploymentExposure: "private" });
+      const flow = await connectAndAuthorize(app, company.id, "user", fixture);
+
+      await request(app)
+        .get("/api/tools/oauth/callback")
+        .set("x-test-no-session", "1")
+        .set("Accept", "text/html")
+        .query({ state: flow.state, code: flow.code, iss: ISSUER })
+        .expect(403);
+
+      expect(await activeGrants(flow.connectionId)).toEqual([]);
+      expect(fixture.requestsTo("/token")).toHaveLength(0);
+    });
+
+    it("still rejects an organization flow without a session when the deployment opts in", async () => {
+      const fixture = installMcpOAuthFixture({ auth: "oauth" });
+      const company = await createCompany(db);
+      await insertBoardUser();
+      vi.stubEnv("PAPERCLIP_PUBLIC_URL", PUBLIC_BASE_URL);
+      const app = createRouteApp(db, {
+        deploymentMode: "authenticated",
+        deploymentExposure: "private",
+        oauthCrossOriginCallback: true,
+      });
+      const flow = await connectAndAuthorize(app, company.id, "organization", fixture);
+
+      await request(app)
+        .get("/api/tools/oauth/callback")
+        .set("x-test-no-session", "1")
+        .set("Accept", "text/html")
+        .query({ state: flow.state, code: flow.code, iss: ISSUER })
+        .expect(403);
+
+      expect(fixture.requestsTo("/token")).toHaveLength(0);
+      const [stateRow] = await db.select().from(toolOauthStates).where(eq(toolOauthStates.state, flow.state));
+      expect(stateRow).toBeTruthy();
+    });
+
+    it.each([
+      { optIn: false, connected: false },
+      { optIn: true, connected: true },
+    ])(
+      "lets the same user finish an organization flow from a second session only when opted in ($optIn)",
+      async ({ optIn, connected }) => {
+        const fixture = installMcpOAuthFixture({ auth: "oauth" });
+        const company = await createCompany(db);
+        vi.stubEnv("PAPERCLIP_PUBLIC_URL", PUBLIC_BASE_URL);
+        const app = createRouteApp(db, {
+          deploymentMode: "authenticated",
+          deploymentExposure: "private",
+          oauthCrossOriginCallback: optIn,
+        });
+        const flow = await connectAndAuthorize(app, company.id, "organization", fixture, "private-origin-session");
+
+        await request(app)
+          .get("/api/tools/oauth/callback")
+          .set("x-test-session", "public-origin-session")
+          .query({ state: flow.state, code: flow.code, iss: ISSUER })
+          .expect(connected ? 200 : 403);
+
+        // The code is exchanged only when the callback is accepted.
+        expect(fixture.requestsTo("/token")).toHaveLength(connected ? 1 : 0);
+      },
+    );
   });
 
   it("does not let another user take over an archived personal URL connection", async () => {
