@@ -2701,6 +2701,20 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     expect(mockNavigate).not.toHaveBeenCalledWith("/apps/connect", { replace: true });
   });
 
+  it("states the Slack app prerequisites before consent", async () => {
+    const slack = CONNECTABLE_APP_DEFINITIONS.find((app) => app.slug === "slack")!;
+    mockParams.appKey = "slack";
+    listGalleryMock.mockResolvedValueOnce({ apps: [slack] });
+
+    await render();
+
+    // Slack rejects the authorization request unless the app carries these two
+    // settings, and the consent screen only says "Invalid permissions
+    // requested" (#13935).
+    expect(container.textContent).toContain("User Token Scopes");
+    expect(container.textContent).toContain("Model Context Protocol");
+  });
+
   it("routes the enabled Notion gallery tile through the generic source deep link", async () => {
     listGalleryMock.mockResolvedValueOnce({ apps: [NOTION] });
     await render();
