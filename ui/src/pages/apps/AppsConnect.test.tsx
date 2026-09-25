@@ -2713,6 +2713,9 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     // requested" (#13935).
     expect(container.textContent).toContain("User Token Scopes");
     expect(container.textContent).toContain("Model Context Protocol");
+    // The Slack method carries no warnings, so the guidance keeps its own
+    // spacing instead of adding an empty list.
+    expect(container.querySelector("ul.list-disc")).toBeNull();
   });
 
   it("routes the enabled Notion gallery tile through the generic source deep link", async () => {

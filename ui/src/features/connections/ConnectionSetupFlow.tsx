@@ -2410,9 +2410,11 @@ function StandardConnectionSetupFlow({
         {SETUP_GUIDANCE_SLUGS.has(entry?.slug ?? "") && (
           <div className="mb-6 space-y-3 text-sm text-muted-foreground">
             <p>{accessStepMethod?.guidanceMd}</p>
-            <ul className="list-disc space-y-2 pl-5">
-              {accessStepMethod?.warnings?.map((warning) => <li key={warning}>{warning}</li>)}
-            </ul>
+            {accessStepMethod?.warnings?.length ? (
+              <ul className="list-disc space-y-2 pl-5">
+                {accessStepMethod.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+              </ul>
+            ) : null}
           </div>
         )}
         <AccessStep
