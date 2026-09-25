@@ -151,6 +151,8 @@ describeEmbeddedPostgres("heartbeat runtime MCP servers", () => {
 
     const gateways = await db.select().from(toolMcpGateways);
     expect(gateways).toHaveLength(1);
+    // The column, not metadata, is what named-gateway auth checks run tokens against.
+    expect(gateways[0]!.agentId).toBe(agent!.id);
     expect(gateways[0]!.metadata).toMatchObject({
       nativeRuntimeAssignmentDigest: first[0]!.connectionId.slice("assignment:".length),
       agentId: agent!.id,

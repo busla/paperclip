@@ -4735,6 +4735,7 @@ export async function buildPaperclipRuntimeMcpServers(input: {
           description: "Run-scoped Paperclip Runner MCP gateway.",
           profileId: profile!.id,
           defaultProfileMode: "gateway_only",
+          agentId: input.agent.id,
           metadata: {
             nativeRuntimeAssignmentDigest: assignmentDigest,
             agentId: input.agent.id,
