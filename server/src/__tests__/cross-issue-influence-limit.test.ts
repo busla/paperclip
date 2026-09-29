@@ -22,6 +22,12 @@ function counterDb(
               then: (resolve: (rows: unknown[]) => unknown) => resolve([{ count: observedCount }]),
             };
           }
+          // The checkout-lock lookup: this run holds no checkout on the target.
+          if (Object.keys(selection).join() === "id") {
+            return {
+              then: (resolve: (rows: unknown[]) => unknown) => resolve([]),
+            };
+          }
           return {
             for: () => ({
               then: (resolve: (rows: unknown[]) => unknown) => resolve(runOverrides === null ? [] : [{

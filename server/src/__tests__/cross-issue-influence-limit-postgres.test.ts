@@ -7,6 +7,7 @@ import {
   companies,
   createDb,
   heartbeatRuns,
+  issues,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -31,6 +32,7 @@ describeEmbeddedPostgres("cross-issue influence limit PostgreSQL serialization",
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(issues);
     await db.delete(heartbeatRuns);
     await db.delete(agents);
     await db.delete(companies);
@@ -112,5 +114,66 @@ describeEmbeddedPostgres("cross-issue influence limit PostgreSQL serialization",
       .where(and(eq(activityLog.companyId, companyId), eq(activityLog.runId, runId)));
     expect(recorded.filter((row) => row.action === "issue.cross_issue_influence_observed")).toHaveLength(20);
     expect(recorded.filter((row) => row.action === "issue.cross_issue_influence_cap_rejected")).toHaveLength(1);
+  });
+
+  it("lets a timer-woken run write to the issue it checked out, and only that issue", async () => {
+    const companyId = randomUUID();
+    const agentId = randomUUID();
+    const otherAgentId = randomUUID();
+    const runId = randomUUID();
+    const otherRunId = randomUUID();
+    const ownIssueId = randomUUID();
+    const lockedByOtherRunId = randomUUID();
+    const lockedForOtherAgentId = randomUUID();
+
+    await db.insert(companies).values({
+      id: companyId,
+      name: "Paperclip",
+      issuePrefix: `C${companyId.replace(/-/g, "").slice(0, 6).toUpperCase()}`,
+      defaultResponsibleUserId: "board-user",
+    });
+    await db.insert(agents).values([agentId, otherAgentId].map((id, index) => ({
+      id,
+      companyId,
+      name: `Timer Agent ${index}`,
+      role: "engineer",
+      adapterType: "claude_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    })));
+    // A heartbeat timer wake: no issue or task in the run's context.
+    await db.insert(heartbeatRuns).values([runId, otherRunId].map((id) => ({
+      id,
+      companyId,
+      agentId,
+      status: "running",
+      invocationSource: "timer",
+      responsibleUserId: "board-user",
+      contextSnapshot: { wakeReason: "heartbeat_timer" },
+    })));
+    await db.insert(issues).values([
+      { id: ownIssueId, companyId, title: "Own", status: "in_progress", assigneeAgentId: agentId, checkoutRunId: runId },
+      { id: lockedByOtherRunId, companyId, title: "Other run", status: "in_progress", assigneeAgentId: agentId, checkoutRunId: otherRunId },
+      { id: lockedForOtherAgentId, companyId, title: "Other agent", status: "in_progress", assigneeAgentId: otherAgentId, checkoutRunId: runId },
+    ]);
+
+    const attempt = (targetIssueId: string) => observeCrossIssueInfluence(db, {
+      companyId,
+      runId,
+      agentId,
+      targetIssueId,
+      kind: "comment",
+      now: CROSS_ISSUE_INFLUENCE_ENFORCE_AT,
+    });
+
+    // Its own checkout is not cross-issue: no refusal, nothing counted against the cap.
+    await expect(attempt(ownIssueId)).resolves.toBeNull();
+    const recorded = await db.select().from(activityLog).where(eq(activityLog.runId, runId));
+    expect(recorded).toHaveLength(0);
+
+    // Without a source issue, anything the run does not hold the lock on is still refused.
+    await expect(attempt(lockedByOtherRunId)).rejects.toMatchObject({ status: 403 });
+    await expect(attempt(lockedForOtherAgentId)).rejects.toMatchObject({ status: 403 });
   });
 });
