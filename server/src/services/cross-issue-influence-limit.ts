@@ -109,23 +109,25 @@ export async function observeCrossIssueInfluence(
       throw crossIssueInfluenceRunContextError();
     }
 
-    // A run owns the issue it holds the checkout lock on, whatever woke it. A
-    // timer heartbeat carries no source issue, yet checkout already proved this
-    // run may work the issue; refusing every write after that success leaves the
-    // agent unable to comment on, update, or block its own task.
-    const checkedOutByRun = await tx
-      .select({ id: issues.id })
-      .from(issues)
-      .where(and(
-        eq(issues.id, input.targetIssueId),
-        eq(issues.companyId, input.companyId),
-        eq(issues.checkoutRunId, input.runId),
-        eq(issues.assigneeAgentId, input.agentId),
-      ))
-      .then((rows) => rows[0] ?? null);
-    if (checkedOutByRun) return null;
-
     const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
+
+    // An issue assigned to the run's agent is the run's own work when the run
+    // holds its checkout lock, or when nothing else scopes the run: a heartbeat
+    // timer wake carries no source issue, and its natural scope is the agent's
+    // own assignments. Refusing those writes left timer-woken agents unable to
+    // comment on, update, or block their own tasks.
+    const target = await tx
+      .select({ assigneeAgentId: issues.assigneeAgentId, checkoutRunId: issues.checkoutRunId })
+      .from(issues)
+      .where(and(eq(issues.id, input.targetIssueId), eq(issues.companyId, input.companyId)))
+      .then((rows) => rows[0] ?? null);
+    if (
+      target?.assigneeAgentId === input.agentId &&
+      (!sourceIssueId || target.checkoutRunId === input.runId)
+    ) {
+      return null;
+    }
+
     if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
     if (
       sourceIssueId === input.targetIssueId ||
