@@ -116,15 +116,17 @@ describeEmbeddedPostgres("cross-issue influence limit PostgreSQL serialization",
     expect(recorded.filter((row) => row.action === "issue.cross_issue_influence_cap_rejected")).toHaveLength(1);
   });
 
-  it("lets a timer-woken run write to the issue it checked out, and only that issue", async () => {
+  it("scopes an unscoped run to its agent's own issues, and a scoped run to its source and checkout", async () => {
     const companyId = randomUUID();
     const agentId = randomUUID();
     const otherAgentId = randomUUID();
-    const runId = randomUUID();
-    const otherRunId = randomUUID();
+    const timerRunId = randomUUID();
+    const scopedRunId = randomUUID();
+    const sourceIssueId = randomUUID();
     const ownIssueId = randomUUID();
-    const lockedByOtherRunId = randomUUID();
-    const lockedForOtherAgentId = randomUUID();
+    const ownCheckedOutByScopedRunId = randomUUID();
+    const otherAgentsIssueId = randomUUID();
+    const unassignedIssueId = randomUUID();
 
     await db.insert(companies).values({
       id: companyId,
@@ -135,30 +137,29 @@ describeEmbeddedPostgres("cross-issue influence limit PostgreSQL serialization",
     await db.insert(agents).values([agentId, otherAgentId].map((id, index) => ({
       id,
       companyId,
-      name: `Timer Agent ${index}`,
+      name: `Scoped Agent ${index}`,
       role: "engineer",
       adapterType: "claude_local",
       adapterConfig: {},
       runtimeConfig: {},
       permissions: {},
     })));
-    // A heartbeat timer wake: no issue or task in the run's context.
-    await db.insert(heartbeatRuns).values([runId, otherRunId].map((id) => ({
-      id,
-      companyId,
-      agentId,
-      status: "running",
-      invocationSource: "timer",
-      responsibleUserId: "board-user",
-      contextSnapshot: { wakeReason: "heartbeat_timer" },
-    })));
+    await db.insert(heartbeatRuns).values([
+      // A heartbeat timer wake: no issue or task in the run's context.
+      { id: timerRunId, companyId, agentId, status: "running", invocationSource: "timer",
+        responsibleUserId: "board-user", contextSnapshot: { wakeReason: "heartbeat_timer" } },
+      { id: scopedRunId, companyId, agentId, status: "running", invocationSource: "assignment",
+        responsibleUserId: "board-user", contextSnapshot: { issueId: sourceIssueId } },
+    ]);
     await db.insert(issues).values([
-      { id: ownIssueId, companyId, title: "Own", status: "in_progress", assigneeAgentId: agentId, checkoutRunId: runId },
-      { id: lockedByOtherRunId, companyId, title: "Other run", status: "in_progress", assigneeAgentId: agentId, checkoutRunId: otherRunId },
-      { id: lockedForOtherAgentId, companyId, title: "Other agent", status: "in_progress", assigneeAgentId: otherAgentId, checkoutRunId: runId },
+      { id: ownIssueId, companyId, title: "Own", status: "in_progress", assigneeAgentId: agentId },
+      { id: ownCheckedOutByScopedRunId, companyId, title: "Own, checked out", status: "in_progress",
+        assigneeAgentId: agentId, checkoutRunId: scopedRunId },
+      { id: otherAgentsIssueId, companyId, title: "Other agent", status: "in_progress", assigneeAgentId: otherAgentId },
+      { id: unassignedIssueId, companyId, title: "Unassigned", status: "todo" },
     ]);
 
-    const attempt = (targetIssueId: string) => observeCrossIssueInfluence(db, {
+    const attempt = (runId: string, targetIssueId: string) => observeCrossIssueInfluence(db, {
       companyId,
       runId,
       agentId,
@@ -167,13 +168,17 @@ describeEmbeddedPostgres("cross-issue influence limit PostgreSQL serialization",
       now: CROSS_ISSUE_INFLUENCE_ENFORCE_AT,
     });
 
-    // Its own checkout is not cross-issue: no refusal, nothing counted against the cap.
-    await expect(attempt(ownIssueId)).resolves.toBeNull();
-    const recorded = await db.select().from(activityLog).where(eq(activityLog.runId, runId));
-    expect(recorded).toHaveLength(0);
+    // Unscoped: its agent's own issues are its work — checkout or not, nothing counted.
+    await expect(attempt(timerRunId, ownIssueId)).resolves.toBeNull();
+    await expect(attempt(timerRunId, ownCheckedOutByScopedRunId)).resolves.toBeNull();
+    expect(await db.select().from(activityLog).where(eq(activityLog.runId, timerRunId))).toHaveLength(0);
+    // ...and anything else is still refused outright.
+    await expect(attempt(timerRunId, otherAgentsIssueId)).rejects.toMatchObject({ status: 403 });
+    await expect(attempt(timerRunId, unassignedIssueId)).rejects.toMatchObject({ status: 403 });
 
-    // Without a source issue, anything the run does not hold the lock on is still refused.
-    await expect(attempt(lockedByOtherRunId)).rejects.toMatchObject({ status: 403 });
-    await expect(attempt(lockedForOtherAgentId)).rejects.toMatchObject({ status: 403 });
+    // Scoped: the issue it holds the checkout on is its own; another of the agent's
+    // issues is still cross-issue and counted, exactly as before.
+    await expect(attempt(scopedRunId, ownCheckedOutByScopedRunId)).resolves.toBeNull();
+    await expect(attempt(scopedRunId, ownIssueId)).resolves.toMatchObject({ allowed: true, count: 1 });
   });
 });

@@ -22,10 +22,11 @@ function counterDb(
               then: (resolve: (rows: unknown[]) => unknown) => resolve([{ count: observedCount }]),
             };
           }
-          // The checkout-lock lookup: this run holds no checkout on the target.
-          if (Object.keys(selection).join() === "id") {
+          // The target-ownership lookup: the target belongs to another agent.
+          if (Object.keys(selection).includes("assigneeAgentId")) {
             return {
-              then: (resolve: (rows: unknown[]) => unknown) => resolve([]),
+              then: (resolve: (rows: unknown[]) => unknown) =>
+                resolve([{ assigneeAgentId: "another-agent", checkoutRunId: null }]),
             };
           }
           return {
