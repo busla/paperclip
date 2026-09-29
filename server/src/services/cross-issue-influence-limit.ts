@@ -1,6 +1,6 @@
 import { and, count, eq } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { activityLog, heartbeatRuns } from "@paperclipai/db";
+import { activityLog, heartbeatRuns, issues } from "@paperclipai/db";
 import { isUuidLike, issueWriteDenialResponse } from "@paperclipai/shared";
 import { forbidden } from "../errors.js";
 import { logger } from "../middleware/logger.js";
@@ -108,6 +108,22 @@ export async function observeCrossIssueInfluence(
     ) {
       throw crossIssueInfluenceRunContextError();
     }
+
+    // A run owns the issue it holds the checkout lock on, whatever woke it. A
+    // timer heartbeat carries no source issue, yet checkout already proved this
+    // run may work the issue; refusing every write after that success leaves the
+    // agent unable to comment on, update, or block its own task.
+    const checkedOutByRun = await tx
+      .select({ id: issues.id })
+      .from(issues)
+      .where(and(
+        eq(issues.id, input.targetIssueId),
+        eq(issues.companyId, input.companyId),
+        eq(issues.checkoutRunId, input.runId),
+        eq(issues.assigneeAgentId, input.agentId),
+      ))
+      .then((rows) => rows[0] ?? null);
+    if (checkedOutByRun) return null;
 
     const sourceIssueId = readRunSourceIssueId(run.contextSnapshot);
     if (!sourceIssueId) throw crossIssueInfluenceRunContextError();
