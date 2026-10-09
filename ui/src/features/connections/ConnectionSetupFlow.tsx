@@ -3942,6 +3942,20 @@ function OAuthClientFields({
             ? `${entry.name} does not let Paperclip register itself automatically, so this connector needs an OAuth app you create. Add the callback URL below in ${entry.name}, then paste the client details back here.`
             : `Register Paperclip's callback URI in ${entry.name}, then enter the customer-owned client details.`}
         </p>
+        {/*
+          The provider console needs work before consent will succeed, and the
+          method guidance is the only place it is written down. Show it here,
+          next to the client fields, while the reader can still act on it.
+        */}
+        {SETUP_GUIDANCE_SLUGS.has(entry.slug) && !method.oauthClientSecretRequired ? (
+          <p className="mt-2 text-xs text-muted-foreground">{method.guidanceMd}</p>
+        ) : null}
+        {SETUP_GUIDANCE_SLUGS.has(entry.slug) && customerOwnedScopes(method).length > 0 ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Add these scopes to your {entry.name} app:{" "}
+            <span className="font-mono">{customerOwnedScopes(method).join(" ")}</span>
+          </p>
+        ) : null}
         {method.consoleLinks?.register ? (
           <a
             href={method.consoleLinks.register}

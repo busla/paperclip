@@ -3218,7 +3218,9 @@ describe("AppsConnect — Connect with a link (M4 frame)", () => {
     expect(container.textContent).toContain("Model Context Protocol");
     // The scopes come from the method, so the screen cannot name a scope that
     // the authorization request omits.
-    expect(container.textContent).toContain("channels:read chat:write search:read.public");
+    const scopes = slack.methods.find((method) => method.auth === "oauth")!.defaults!.scopesHint!;
+    expect(scopes).toContain("search:read.public");
+    expect(container.textContent).toContain(scopes.join(" "));
     // The Slack method carries no warnings, so the guidance keeps its own
     // spacing instead of adding an empty list.
     expect(container.querySelector("ul.list-disc")).toBeNull();
