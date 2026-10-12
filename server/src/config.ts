@@ -8,7 +8,6 @@ import { resolvePaperclipEnvPath } from "./paths.js";
 import { maybeRepairLegacyWorktreeConfigAndEnvFiles } from "./worktree-config.js";
 import { shouldLoadWorkingDirectoryEnv } from "./env-file-policy.js";
 import { applyEmptyWorktreeSigningSecrets } from "./dev-runner-worktree.js";
-||||||| cea8dda47
 import { isLoopbackHost } from "./url-utils.js";
 import {
   AUTH_BASE_URL_MODES,
